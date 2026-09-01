@@ -55,7 +55,13 @@ def transcribe(
         )
 
     try:
-        model = WhisperModel(model_size, device="auto", compute_type="int8")
+        # device="cpu" is deliberate, not a placeholder: "auto" makes
+        # ctranslate2 probe for a CUDA GPU and try to load cuBLAS/cuDNN even
+        # on machines with no NVIDIA card or CUDA toolkit installed, which
+        # fails with a cryptic "cublas64_12.dll not found" instead of just
+        # running on CPU. This project has no GPU/CUDA install story, so CPU
+        # is the only mode that's guaranteed to work on a plain machine.
+        model = WhisperModel(model_size, device="cpu", compute_type="int8")
     except Exception as exc:  # noqa: BLE001 - surface as a readable app error
         raise TranscriberError(f"Не удалось загрузить модель Whisper: {exc}") from exc
 
