@@ -5,6 +5,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -49,3 +52,17 @@ jobs:
         with:
           name: SilentCutter-windows
           path: dist/SilentCutter.exe
+
+      - name: Publish to "latest" release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view latest --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload latest dist/SilentCutter.exe --repo "${{ github.repository }}" --clobber
+          else
+            gh release create latest dist/SilentCutter.exe \
+              --repo "${{ github.repository }}" \
+              --title "SilentCutter (Windows)" \
+              --notes "Готовая сборка для Windows, ffmpeg уже встроен. Скачайте SilentCutter.exe и запустите — больше ничего ставить не нужно."
+          fi
