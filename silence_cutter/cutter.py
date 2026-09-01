@@ -238,7 +238,23 @@ def run_cut(
     if has_audio:
         map_args += ["-map", "[outa]"]
 
-    output_args = ["-r", f"{fps:.6f}", "-c:v", "libx264", "-crf", "20", "-preset", "veryfast"]
+    # On slow-to-encode source (e.g. HEVC at high fps), video packets can back
+    # up behind the much cheaper audio stream faster than the muxer's default
+    # queue allows; past that limit ffmpeg silently *drops* video packets and
+    # still exits 0, producing a short video track next to a full-length audio
+    # one. A bigger queue lets the encoder catch up instead of losing frames.
+    output_args = [
+        "-max_muxing_queue_size",
+        "9999",
+        "-r",
+        f"{fps:.6f}",
+        "-c:v",
+        "libx264",
+        "-crf",
+        "20",
+        "-preset",
+        "veryfast",
+    ]
     if has_audio:
         output_args += ["-c:a", "aac", "-b:a", "192k"]
     else:
