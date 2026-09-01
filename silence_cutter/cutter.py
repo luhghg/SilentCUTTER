@@ -243,18 +243,15 @@ def run_cut(
     # queue allows; past that limit ffmpeg silently *drops* video packets and
     # still exits 0, producing a short video track next to a full-length audio
     # one. A bigger queue lets the encoder catch up instead of losing frames.
-    output_args = [
-        "-max_muxing_queue_size",
-        "9999",
-        "-r",
-        f"{fps:.6f}",
-        "-c:v",
-        "libx264",
-        "-crf",
-        "20",
-        "-preset",
-        "veryfast",
-    ]
+    output_args = ["-max_muxing_queue_size", "9999"]
+    if fps > 0:
+        output_args += ["-r", f"{fps:.6f}"]
+    elif on_log is not None:
+        on_log(
+            "Не удалось определить частоту кадров исходного видео — "
+            "пропускаю принудительный fps, ffmpeg подберёт сам."
+        )
+    output_args += ["-c:v", "libx264", "-crf", "20", "-preset", "veryfast"]
     if has_audio:
         output_args += ["-c:a", "aac", "-b:a", "192k"]
     else:
@@ -281,7 +278,11 @@ def _humanize_ffmpeg_error(stderr_text: str, returncode: int) -> str:
         if line.strip() and ("Error" in line or "error" in line or "No such file" in line)
     ]
     if error_lines:
-        detail = error_lines[-1]
+        # The line right before the final error often names *which* option or
+        # stream it was about (e.g. "Error setting option r ... to value 0"),
+        # while the last line alone is sometimes just a bare "Invalid
+        # argument" - keep up to the last two for more useful context.
+        detail = " | ".join(error_lines[-2:])
     else:
         tail = [line.strip() for line in stderr_text.splitlines() if line.strip()]
         detail = tail[-1] if tail else "нет дополнительной информации"
