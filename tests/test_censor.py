@@ -18,9 +18,17 @@ def test_escape_simple_path():
     assert _escape_filter_path("/tmp/foo.cmds") == "'/tmp/foo.cmds'"
 
 
-def test_escape_path_with_colon_left_literal_inside_quotes():
-    # Windows drive letters (C:\...) must survive untouched inside quotes.
-    assert _escape_filter_path("C:\\Users\\foo.cmds") == "'C:\\Users\\foo.cmds'"
+def test_escape_path_with_windows_drive_letter():
+    # A bare colon inside single quotes is NOT safe on its own - ffmpeg's
+    # per-filter option parser still reads it as a key=value separator and
+    # errors out ("Invalid argument"), confirmed by reproducing it against a
+    # real ffmpeg binary. Backslashes and the colon must be backslash-escaped
+    # *before* the single-quote wrapping.
+    assert _escape_filter_path("C:\\Users\\foo.cmds") == "'C\\:\\\\Users\\\\foo.cmds'"
+
+
+def test_escape_path_with_backslash_only():
+    assert _escape_filter_path("a\\b") == "'a\\\\b'"
 
 
 def test_escape_path_with_single_quote():

@@ -49,11 +49,17 @@ FADE_STEPS = 8  # intermediate volume steps used to approximate a smooth fade
 def _escape_filter_path(path: str) -> str:
     """Quote a filesystem path for safe use as an ffmpeg filter option value.
 
-    Inside single quotes, ffmpeg's filtergraph parser treats everything
-    literally except a literal single quote itself - so colons (Windows
-    drive letters) and backslashes need no escaping, only quotes do.
+    Single quotes alone are *not* enough here: a colon inside a single-quoted
+    option value (e.g. a Windows drive letter, "C:\\Users\\...") still gets
+    read by ffmpeg's per-filter option parser as a key=value separator,
+    breaking the parse with "Invalid argument" - confirmed by reproducing it
+    locally. Backslash-escaping the backslashes and the colon first, and
+    *then* wrapping the result in single quotes (for literal single quotes
+    and safety in general) is what actually works.
     """
-    return "'" + path.replace("'", "'\\''") + "'"
+    escaped = path.replace("\\", "\\\\").replace(":", "\\:")
+    escaped = escaped.replace("'", "'\\''")
+    return "'" + escaped + "'"
 
 
 def _fade_steps(edge_time: float, fade: float, rising: bool) -> list[tuple[float, float]]:
