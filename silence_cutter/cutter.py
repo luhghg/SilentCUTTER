@@ -219,6 +219,21 @@ def run_filter_complex(
             Path(script_path).unlink(missing_ok=True)
 
 
+# A single trim+concat filter graph handling hundreds of segments has been
+# observed (on real footage, both H.264 and HEVC) to silently truncate the
+# video track while the audio track keeps going full length - the video
+# encoder falls behind, and somewhere between ffmpeg's muxing queue, filter
+# graph buffering and encoder backpressure it starts dropping video frames
+# without ever raising an error. -max_muxing_queue_size alone didn't fully
+# fix it at large segment counts. Splitting into bounded batches sidesteps
+# the problem category entirely instead of chasing the exact internal limit:
+# each ffmpeg invocation only ever has to hold BATCH_SIZE segments open at
+# once, well inside sizes that have run clean in testing (up to several
+# hundred), and the batches are stitched back together with the concat
+# demuxer, which is a fast stream copy - no re-encode, no filter graph.
+BATCH_SIZE = 40
+
+
 def run_cut(
     input_path: str,
     output_path: str,
@@ -231,6 +246,115 @@ def run_cut(
     cancel_event: Optional[threading.Event] = None,
 ) -> None:
     """Cut and concatenate ``segments`` from ``input_path`` into ``output_path``."""
+    if len(segments) <= BATCH_SIZE:
+        _run_cut_batch(
+            input_path,
+            output_path,
+            segments,
+            fps,
+            has_audio,
+            on_progress=on_progress,
+            on_log=on_log,
+            register_process=register_process,
+            cancel_event=cancel_event,
+        )
+        return
+
+    batches = [segments[i : i + BATCH_SIZE] for i in range(0, len(segments), BATCH_SIZE)]
+    total_duration = sum(seg.duration for seg in segments)
+
+    if on_log is not None:
+        on_log(
+            f"Сегментов много ({len(segments)}) — режу пачками по {BATCH_SIZE}, "
+            "чтобы видео не оборвалось раньше времени."
+        )
+
+    batch_paths: list[str] = []
+    concat_list_path: Optional[str] = None
+    try:
+        elapsed_duration = 0.0
+        for i, batch in enumerate(batches):
+            if cancel_event is not None and cancel_event.is_set():
+                raise CancelledError()
+
+            with tempfile.NamedTemporaryFile(
+                suffix=".mp4", prefix="silence_cutter_batch_", delete=False
+            ) as batch_file:
+                batch_path = batch_file.name
+            batch_paths.append(batch_path)
+
+            batch_duration = sum(seg.duration for seg in batch)
+            batch_start = elapsed_duration
+
+            def batch_progress(fraction: float, _start: float = batch_start, _dur: float = batch_duration) -> None:
+                if on_progress is not None and total_duration > 0:
+                    on_progress(min(1.0, (_start + fraction * _dur) / total_duration))
+
+            if on_log is not None:
+                on_log(f"Пачка {i + 1}/{len(batches)} ({len(batch)} сегментов)...")
+
+            _run_cut_batch(
+                input_path,
+                batch_path,
+                batch,
+                fps,
+                has_audio,
+                on_progress=batch_progress,
+                on_log=on_log,
+                register_process=register_process,
+                cancel_event=cancel_event,
+            )
+            elapsed_duration += batch_duration
+
+        concat_list_path = _write_concat_list(batch_paths)
+        cmd = [
+            ffmpeg_path(),
+            "-hide_banner",
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            concat_list_path,
+            "-c",
+            "copy",
+            output_path,
+        ]
+        returncode, stderr_text = _run_streaming(cmd, total_duration, None, on_log, register_process)
+        if cancel_event is not None and cancel_event.is_set():
+            raise CancelledError()
+        if returncode != 0:
+            raise CutterError(_humanize_ffmpeg_error(stderr_text, returncode))
+    finally:
+        for batch_path in batch_paths:
+            Path(batch_path).unlink(missing_ok=True)
+        if concat_list_path is not None:
+            Path(concat_list_path).unlink(missing_ok=True)
+
+
+def _write_concat_list(paths: list[str]) -> str:
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".txt", prefix="silence_cutter_concat_", delete=False, encoding="utf-8"
+    ) as list_file:
+        for path in paths:
+            escaped = path.replace("'", "'\\''")
+            list_file.write(f"file '{escaped}'\n")
+        return list_file.name
+
+
+def _run_cut_batch(
+    input_path: str,
+    output_path: str,
+    segments: list[Segment],
+    fps: float,
+    has_audio: bool,
+    on_progress: Optional[Callable[[float], None]] = None,
+    on_log: Optional[Callable[[str], None]] = None,
+    register_process: Optional[Callable[[subprocess.Popen], None]] = None,
+    cancel_event: Optional[threading.Event] = None,
+) -> None:
+    """Cut and concatenate ``segments`` (assumed small enough for one filter graph)."""
     script_content = build_filter_complex_script(segments, has_audio)
     output_duration = sum(seg.duration for seg in segments)
 
