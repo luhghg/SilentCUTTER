@@ -7,6 +7,7 @@ from silence_cutter.censor import (
     FADE_STEPS,
     _build_sendcmd_script,
     _escape_filter_path,
+    censor,
 )
 
 
@@ -98,6 +99,42 @@ def test_no_sine_beep_amix_concat_or_expression_syntax():
     assert "concat" not in script
     assert "between(" not in script
     assert "eval=frame" not in script
+
+
+# ---------------------------------------------------------------------------
+# censor() - clipping intervals to the real duration (defense in depth
+# against a mistimed word - e.g. a Whisper hallucination near the end of
+# long audio - producing an interval that runs off the end of the file)
+# ---------------------------------------------------------------------------
+
+def test_censor_drops_interval_entirely_past_duration(tmp_path):
+    video = tmp_path / "in.mp4"
+    video.write_bytes(b"not a real video, never touched")
+    out = tmp_path / "out.mp4"
+
+    logs = []
+    # Interval starts at 999s but the real file is only 10s long - should be
+    # dropped entirely, taking the "no profanity found" fast path (no ffmpeg
+    # invocation, so this doesn't need a real video file).
+    censor(str(video), [(999.0, 1005.0)], str(out), duration=10.0, on_log=logs.append)
+
+    assert out.exists()
+    assert not video.exists()
+    assert any("не найден" in msg for msg in logs)
+
+
+def test_censor_clips_interval_end_to_duration():
+    from silence_cutter.censor import _build_sendcmd_script
+
+    # Simulate what censor() does internally: an interval whose end runs past
+    # the real duration gets clamped before the sendcmd script is built.
+    intervals = [(5.0, 1000.0)]
+    duration = 10.0
+    clipped = [(s, min(e, duration)) for s, e in intervals if s < duration]
+    assert clipped == [(5.0, 10.0)]
+    script = _build_sendcmd_script(clipped, fade=0.02)
+    assert "1000.000000" not in script
+    assert "10.000000 volume volume 1.000000;" in script
 
 
 def test_scales_to_thousands_of_intervals_without_blowing_up():

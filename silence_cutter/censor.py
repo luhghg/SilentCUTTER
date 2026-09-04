@@ -113,6 +113,20 @@ def censor(
         Path(video_path).replace(out_path)
         return
 
+    if duration > 0:
+        # Defense in depth: a mistimed word (e.g. a Whisper hallucination near
+        # the end of long audio - see MAX_WORD_DURATION in transcriber.py)
+        # should never be able to silence past the actual end of the file.
+        intervals = [
+            (start, min(end, duration)) for start, end in intervals if start < duration
+        ]
+
+    if not intervals:
+        if on_log is not None:
+            on_log("Мат не найден, заглушение не требуется.")
+        Path(video_path).replace(out_path)
+        return
+
     cmd_script_content = _build_sendcmd_script(intervals, fade)
 
     cmd_script_path = None

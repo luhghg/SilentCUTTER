@@ -15,6 +15,13 @@ from .matcher import Word
 
 __all__ = ["Word", "TranscriberError", "transcribe", "WHISPER_PROFANITY_PROMPT"]
 
+# Real spoken words essentially never take this long. On long audio, Whisper
+# occasionally hallucinates near the end of a stream (a known failure mode -
+# it can get stuck and emit a "word" whose timestamp spans minutes). Without
+# a check like this, a single such glitch that happens to normalize to a
+# profanity root turns into a multi-minute mute in the final video.
+MAX_WORD_DURATION = 3.0
+
 # Fed to Whisper as initial_prompt so it doesn't self-censor or quietly drop
 # swearing it hears - without this it tends to substitute swear words with
 # tamer lookalikes or silently omit them.
@@ -25,6 +32,25 @@ WHISPER_PROFANITY_PROMPT = (
 
 class TranscriberError(RuntimeError):
     """Raised when speech recognition fails."""
+
+
+def _sanitize_word(text: str, start: float, end: float, total_duration: float) -> Optional[Word]:
+    """Validate and clamp one raw Whisper word, or reject it.
+
+    Rejects empty text and words with a nonsensical or implausibly long
+    duration (see MAX_WORD_DURATION). Clamps start/end into [0, total_duration]
+    when that's known, so a mistimed word can never point past the real end
+    of the audio.
+    """
+    text = text.strip()
+    if not text:
+        return None
+    if end < start or end - start > MAX_WORD_DURATION:
+        return None
+    if total_duration > 0:
+        start = min(start, total_duration)
+        end = min(end, total_duration)
+    return Word(text=text, start=start, end=end)
 
 
 def transcribe(
@@ -85,9 +111,9 @@ def transcribe(
                 raise CancelledError()
 
             for w in segment.words or []:
-                text = w.word.strip()
-                if text:
-                    words.append(Word(text=text, start=w.start, end=w.end))
+                word = _sanitize_word(w.word, w.start, w.end, total_duration)
+                if word is not None:
+                    words.append(word)
 
             if progress_cb is not None and total_duration > 0:
                 progress_cb(min(1.0, max(0.0, segment.end / total_duration)))
