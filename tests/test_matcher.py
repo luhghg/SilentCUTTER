@@ -6,6 +6,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from silence_cutter.matcher import (
+    MAX_MUTE_DURATION,
     Word,
     filter_profane_words,
     find_profanity,
@@ -194,6 +195,52 @@ def test_unsorted_words_still_merge_correctly():
     ]
     intervals = find_profanity(words, ROOTS, [], padding=0.05, lead=0.0)
     assert intervals == [(0.95, 1.25), (4.95, 5.35)]
+
+
+# ---------------------------------------------------------------------------
+# find_profanity - dropping implausibly long merged intervals
+#
+# Whisper has a known failure mode on long audio: it can hallucinate a loop
+# of short repeated "words" near the end of a stream. Individually each one
+# is brief, but chained with no gaps they merge into one interval spanning
+# minutes - a real symptom hit in production (a whole video tail muted).
+# ---------------------------------------------------------------------------
+
+def test_chain_of_short_words_merging_past_max_duration_is_dropped():
+    # Simulate a hallucination loop: 200 tiny "бля" words, each overlapping
+    # into the next (spacing 0.1s, duration 0.15s each - a real symptom of
+    # Whisper repeating itself with no real gap), merging into one ~20s
+    # interval - past MAX_MUTE_DURATION.
+    words = [Word("бля", i * 0.1, i * 0.1 + 0.15) for i in range(200)]
+    intervals = find_profanity(words, ROOTS, [], padding=0.0, lead=0.0)
+    assert intervals == []
+
+
+def test_merged_interval_within_max_duration_is_kept():
+    # A short-ish overlapping chain (well under MAX_MUTE_DURATION) is
+    # plausible real speech and must still be muted normally.
+    words = [Word("бля", i * 1.0, i * 1.0 + 1.5) for i in range(10)]
+    intervals = find_profanity(words, ROOTS, [], padding=0.0, lead=0.0)
+    assert len(intervals) == 1
+    start, end = intervals[0]
+    assert end - start < MAX_MUTE_DURATION
+
+
+def test_merged_interval_exactly_at_max_duration_is_kept():
+    intervals = find_profanity(
+        [Word("бля", 0.0, MAX_MUTE_DURATION)], ROOTS, [], padding=0.0, lead=0.0
+    )
+    assert intervals == [(0.0, MAX_MUTE_DURATION)]
+
+
+def test_only_the_oversized_interval_is_dropped_others_survive():
+    # A hallucination-length chain near the end shouldn't take out an
+    # earlier, legitimate, normal-length match.
+    words = [Word("сука", 1.0, 1.2)] + [
+        Word("бля", 100.0 + i * 0.1, 100.0 + i * 0.1 + 0.15) for i in range(200)
+    ]
+    intervals = find_profanity(words, ROOTS, [], padding=0.0, lead=0.0)
+    assert intervals == [(1.0, 1.2)]
 
 
 # ---------------------------------------------------------------------------

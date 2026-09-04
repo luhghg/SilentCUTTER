@@ -19,6 +19,19 @@ DEFAULT_PADDING = 0.06
 DEFAULT_LEAD = 0.05
 MIN_INTERVAL_AFTER_LEAD = 0.05
 
+# Real continuous cursing - even a rapid-fire rant - essentially always has a
+# micro-pause somewhere within this many seconds. Whisper has a known failure
+# mode on long audio where it hallucinates a *loop* of short repeated
+# "words" near the end of a stream: individually each one is brief (so the
+# per-word duration guard in transcriber.py doesn't catch them), but they
+# chain together with no gap and, if the repeated text happens to normalize
+# to a profanity root, merge into one mute interval spanning minutes. A
+# merged interval this long is far more likely to be that artifact than
+# real speech, so it's dropped rather than muted - silently missing a
+# genuinely long rant is a much smaller cost than wiping out minutes of
+# real audio.
+MAX_MUTE_DURATION = 12.0
+
 _LETTER_MAP = str.maketrans({"ё": "е", "і": "и", "ї": "и", "є": "е"})
 _NON_LETTER_RE = re.compile(r"[^a-zа-я]")
 _REPEAT_RE = re.compile(r"(.)\1+")
@@ -104,7 +117,8 @@ def find_profanity(
 
         raw_intervals.append((start, end))
 
-    return _merge_intervals(raw_intervals)
+    merged = _merge_intervals(raw_intervals)
+    return [(s, e) for s, e in merged if e - s <= MAX_MUTE_DURATION]
 
 
 def _merge_intervals(intervals: list[tuple[float, float]]) -> list[tuple[float, float]]:
