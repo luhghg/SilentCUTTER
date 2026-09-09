@@ -346,3 +346,47 @@ def test_real_wordlists_catch_actual_profanity():
     words = [Word("бля", 1.0, 1.2), Word("сука", 2.0, 2.3)]
     intervals = find_profanity(words, roots, whitelist)
     assert len(intervals) == 2
+
+
+# ---------------------------------------------------------------------------
+# hardcore mode - catch a root anywhere in the word, not just at the start
+# ---------------------------------------------------------------------------
+
+def test_hardcore_catches_root_after_a_prefix():
+    # "распиздяй" contains root "пизд" after the "рас" prefix - prefix mode
+    # (default) can't catch this, hardcore mode can.
+    words = [Word("распиздяй", 1.0, 1.5)]
+    assert find_profanity(words, ROOTS, [], hardcore=False) == []
+    assert find_profanity(words, ROOTS, [], hardcore=True) != []
+
+
+def test_normal_mode_unaffected_by_hardcore_default():
+    # hardcore defaults to False - existing prefix-only behavior unchanged.
+    words = [Word("выблядок", 1.0, 1.5)]
+    assert find_profanity(words, ROOTS, []) == []
+
+
+def test_hardcore_still_respects_whitelist():
+    # "художник" starts with "худ", not a root, but check a case where a
+    # whitelisted word's normalized form would contain a root as substring -
+    # whitelist must still win even in hardcore mode.
+    words = [Word("сукно", 1.0, 1.5)]
+    assert find_profanity(words, ROOTS, ["сукно"], hardcore=True) == []
+
+
+def test_hardcore_filter_profane_words_also_catches_mid_word():
+    words = [Word("выблядок", 1.0, 1.5), Word("привет", 2.0, 2.3)]
+    matched = filter_profane_words(words, ROOTS, [], hardcore=True)
+    assert [w.text for w in matched] == ["выблядок"]
+
+
+def test_real_wordlists_hardcore_catches_prefixed_profanity():
+    roots = load_word_list(
+        Path(__file__).resolve().parents[1] / "silence_cutter" / "data" / "profanity.txt"
+    )
+    whitelist = load_word_list(
+        Path(__file__).resolve().parents[1] / "silence_cutter" / "data" / "whitelist.txt"
+    )
+    words = [Word("распиздяй", 1.0, 1.5), Word("выблядок", 2.0, 2.5)]
+    assert find_profanity(words, roots, whitelist, hardcore=False) == []
+    assert len(find_profanity(words, roots, whitelist, hardcore=True)) > 0

@@ -70,13 +70,16 @@ def load_word_list(path: str | Path) -> list[str]:
 
 
 def filter_profane_words(
-    words: list[Word], roots: list[str], whitelist: list[str]
+    words: list[Word], roots: list[str], whitelist: list[str], hardcore: bool = False
 ) -> list[Word]:
     """Return the subset of ``words`` that are profane, before padding/merge.
 
-    A word is profane if its normalized form starts with one of ``roots`` and
-    is not itself in ``whitelist`` (checked first, always wins). Useful on its
-    own for reporting how many words were matched.
+    A word is profane if its normalized form starts with one of ``roots`` (or,
+    in ``hardcore`` mode, *contains* one of ``roots`` anywhere - catches a
+    root buried after a prefix, e.g. "распиздяй" or "выблядок", at the cost
+    of more false positives on ordinary words that happen to contain a root
+    mid-word) and is not itself in ``whitelist`` (checked first, always
+    wins). Useful on its own for reporting how many words were matched.
     """
     norm_roots = [normalize_word(r) for r in roots if normalize_word(r)]
     norm_whitelist = {normalize_word(w) for w in whitelist}
@@ -86,7 +89,11 @@ def filter_profane_words(
         norm = normalize_word(word.text)
         if not norm or norm in norm_whitelist:
             continue
-        if any(norm.startswith(root) for root in norm_roots):
+        if hardcore:
+            is_match = any(root in norm for root in norm_roots)
+        else:
+            is_match = any(norm.startswith(root) for root in norm_roots)
+        if is_match:
             matched.append(word)
     return matched
 
@@ -97,17 +104,19 @@ def find_profanity(
     whitelist: list[str],
     padding: float = DEFAULT_PADDING,
     lead: float = DEFAULT_LEAD,
+    hardcore: bool = False,
 ) -> list[tuple[float, float]]:
     """Find mute intervals for profane words.
 
-    Each match (see ``filter_profane_words``) is padded on both sides, then
-    ``lead`` shifts the interval's start forward in time so the first sound
-    of the word stays audible - unless that would shrink the interval below
-    ``MIN_INTERVAL_AFTER_LEAD``, in which case lead is skipped for that word.
-    Overlapping/touching intervals are merged.
+    Each match (see ``filter_profane_words``; ``hardcore`` is passed through)
+    is padded on both sides, then ``lead`` shifts the interval's start
+    forward in time so the first sound of the word stays audible - unless
+    that would shrink the interval below ``MIN_INTERVAL_AFTER_LEAD``, in
+    which case lead is skipped for that word. Overlapping/touching intervals
+    are merged.
     """
     raw_intervals: list[tuple[float, float]] = []
-    for word in filter_profane_words(words, roots, whitelist):
+    for word in filter_profane_words(words, roots, whitelist, hardcore=hardcore):
         start = max(0.0, word.start - padding)
         end = word.end + padding
 

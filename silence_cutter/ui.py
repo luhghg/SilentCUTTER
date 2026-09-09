@@ -142,6 +142,15 @@ class App(_BaseWindow):
         )
         self.lead_slider.configure(state="disabled")
 
+        self.hardcore_var = ctk.BooleanVar(value=False)
+        self.hardcore_check = ctk.CTkCheckBox(
+            censor_frame,
+            text="Хардкор-режим (искать мат в любом месте слова, не только в начале)",
+            variable=self.hardcore_var,
+            state="disabled",
+        )
+        self.hardcore_check.pack(anchor="w", padx=14, pady=(2, 10))
+
         # --- actions ---
         actions_frame = ctk.CTkFrame(self)
         actions_frame.pack(fill="x", **pad)
@@ -202,6 +211,7 @@ class App(_BaseWindow):
         state = "normal" if self.censor_var.get() else "disabled"
         self.model_size_menu.configure(state=state)
         self.lead_slider.configure(state=state)
+        self.hardcore_check.configure(state=state)
 
     # ------------------------------------------------------------------
     # Startup checks
@@ -291,6 +301,7 @@ class App(_BaseWindow):
             censor_enabled=self.censor_var.get(),
             model_size=self.model_size_var.get(),
             lead=self.lead_var.get(),
+            hardcore=self.hardcore_var.get(),
         )
         thread = threading.Thread(target=self._process_worker, kwargs=params, daemon=True)
         thread.start()
@@ -327,6 +338,7 @@ class App(_BaseWindow):
         censor_enabled: bool,
         model_size: str,
         lead: float,
+        hardcore: bool,
     ) -> None:
         min_clip = 0.2
         min_gap = 0.1
@@ -425,12 +437,22 @@ class App(_BaseWindow):
 
                 roots = matcher.load_word_list(matcher.DEFAULT_PROFANITY_PATH)
                 whitelist = matcher.load_word_list(matcher.DEFAULT_WHITELIST_PATH)
-                profane_words = matcher.filter_profane_words(words, roots, whitelist)
+                profane_words = matcher.filter_profane_words(
+                    words, roots, whitelist, hardcore=hardcore
+                )
                 censored_words = len(profane_words)
                 intervals = matcher.find_profanity(
-                    words, roots, whitelist, padding=matcher.DEFAULT_PADDING, lead=lead
+                    words,
+                    roots,
+                    whitelist,
+                    padding=matcher.DEFAULT_PADDING,
+                    lead=lead,
+                    hardcore=hardcore,
                 )
-                self._append_log(f"Найдено матерных слов: {censored_words}")
+                self._append_log(
+                    f"Найдено матерных слов: {censored_words}"
+                    + (" (хардкор-режим)" if hardcore else "")
+                )
 
                 self._set_progress(off_censor, "Заглушение...")
                 censor.censor(
